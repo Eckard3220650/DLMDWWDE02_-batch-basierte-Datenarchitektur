@@ -1,0 +1,226 @@
+services:
+  # PostgreSQL 
+  postgres:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - olympic_network
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - olympic_network
+    volumes:
+      - zookeeperdata:/var/lib/zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc -w 5 localhost 2181 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    user: "0"  
+    ports:
+      - "9092:9092"  
+      - "29092:29092"  
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT_DOCKER://kafka:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_DOCKER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_DOCKER
+      KAFKA_LISTENERS: "PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT_DOCKER://0.0.0.0:29092"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      KAFKA_BROKER_ID: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      DATA_DIR: /data
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true" 
+    volumes:
+      - ./olympic_data:/data
+    depends_on:
+      - zookeeper
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Apache Spark Master
+  spark-master:
+    image: bitnami/spark:3
+    container_name: spark-master
+    environment:
+      SPARK_MODE: master
+    ports:
+      - "7077:7077"
+      - "8080:8080"
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://spark-master:8080/api/v1/applications"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Apache Spark Worker
+  spark-worker:
+    image: bitnami/spark:3
+    container_name: spark-worker
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+    depends_on:
+      - spark-master
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://spark-worker:8081/api/v1/workers"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Airflow 
+  airflow:
+    image: puckel/docker-airflow:1.10.9
+    container_name: airflow
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      DATA_DIR: /data
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./dags:/usr/local/airflow/dags
+      - ./olympic_data:/data 
+    depends_on:
+      - postgres
+      - kafka
+      - spark-master
+    networks:
+      - olympic_network
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Prometheus Monitoring
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:9090"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Grafana for Dashboard Visualization
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ELK Stack for Logging (Elasticsearch, Logstash, Kibana)
+  elasticsearch:
+    image: elasticsearch:7.6.2
+    container_name: elasticsearch
+    environment:
+      discovery.type: single-node
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kibana:
+    image: kibana:7.6.2
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  logstash:
+    image: logstash:7.6.2
+    container_name: logstash
+    volumes:
+      - ./logstash/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+    depends_on:
+      - elasticsearch
+    networks:
+      - olympic_network
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:9600/_node/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  pgdata:
+  kafkadata:
+  zookeeperdata:
+  esdata:
+  batch_basierte_datenarchitektur_kafkadata:
+
+networks:
+  olympic_network:
+    driver: bridge

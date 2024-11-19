@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'airflow'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['airflow:8082']
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['localhost:9323']  # Docker metrics for example
