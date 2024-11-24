@@ -51,6 +51,7 @@ Tools
         Nach der Installation:
             Fügen Sie den Pfad zum Docker-Binärverzeichnis (z. B. C:\Program Files\Docker\Docker\resources\bin) zu Ihrer PATH-Variable hinzu.
 
+Die .env-Datei, die mit der docker-compose.yml verbunden ist, und die .env-Datei für die Skripte müssen manuell konfiguriert werden. Es ist entscheidend, dass beide Dateien konsistente Werte enthalten, um Kompatibilitätsprobleme zwischen den Docker-Containern und den Skripten zu vermeiden. Unterschiede in den Konfigurationen können zu Fehlern in der Ausführung der Pipeline führen.
 
 Funktionalität der .bat-Datei. Doppelklicken Sie auf die .bat-Datei um die Ausführung der Pipeline zu starten.
 
